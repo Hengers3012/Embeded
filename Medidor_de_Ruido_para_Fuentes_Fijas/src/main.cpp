@@ -21,6 +21,9 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 
+// Memory EEPROM
+#include <EEPROM.h>
+
 // Definiciones de pines
 #define TFT_RESET 16
 #define TFT_CS 12
@@ -36,11 +39,11 @@
 #define OA_F_3 34
 #define OA_F_4 35
 
-#define PREAMP_UD 25
+#define PREAMP_U_D 25
 #define PREAMP_INC 26
 #define PREAMP_CS 27
 
-#define AMP_UD 21
+#define AMP_U_D 21
 #define AMP_INC 22
 #define AMP_CS 23
 
@@ -50,11 +53,6 @@
 #define MIC_SIGNAL_OUT 2
 
 #define BUZZER_PIN 5
-
-// Variables globales para datos capturados
-volatile float temperatura = 0.0;
-volatile float humedad = 0.0;
-volatile int micValue = 0;
 
 // Credenciales WIFI
 #define WIFI_SSID "SSID"
@@ -69,6 +67,13 @@ volatile int micValue = 0;
 // Configuración del cliente MQTT
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
+
+// Definiciones de direcciones de memoria en EEPROM
+#define EEPROM_SIZE 512
+#define TEMP_START_ADDR 0
+#define HUM_START_ADDR 40
+#define NOISE_START_ADDR 80
+#define DATA_SIZE 40
 
 // Instancia del Sensor DHT22
 DHT dht(DATA_SENSOR_TEMP_AND_HR, DHTTYPE);
@@ -88,6 +93,15 @@ byte rowPins[ROWS] = {0, 1, 2, 3}; // Pines de las filas conectados al PCF8574
 byte colPins[COLS] = {4, 5, 6};    // Pines de las columnas conectados al PCF8574
 
 Keypad_I2C kpd(makeKeymap(keys), rowPins, colPins, ROWS, COLS, KEYPAD_SDA, KEYPAD_SCL, PCF8574_ADDRESS);
+
+// Variables para manejar las banderas de interrupción
+volatile bool leerTempHumFlag = false;
+volatile bool leerMicrofonoFlag = false;
+
+// Variables globales para datos capturados
+volatile float temperatura = 0.0;
+volatile float humedad = 0.0;
+volatile int micValue = 0;
 
 void setup()
 {
@@ -127,11 +141,11 @@ void setup()
 
   // Configuración de las resistencias digitales variables:
   // Preamplificador (Mod_Sensibilidad)
-  pinMode(PREAMP_UD, OUTPUT);
+  pinMode(PREAMP_U_D, OUTPUT);
   pinMode(PREAMP_INC, OUTPUT);
   pinMode(PREAMP_CS, OUTPUT);
   // Amplificador (Mod_Ganancia)
-  pinMode(AMP_UD, OUTPUT);
+  pinMode(AMP_U_D, OUTPUT);
   pinMode(AMP_INC, OUTPUT);
   pinMode(AMP_CS, OUTPUT);
 
@@ -419,6 +433,69 @@ void cicloMonitoreo()
     }
   }
 
+  void ajustarSensibilidadMicrofono(float promedioTemperatura, float promedioHumedad)
+  {
+    // Ajustar la resistencia digital X9C503 para la sensibilidad del micrófono
+    digitalWrite(PREAMP_CS, LOW); // Seleccionar la resistencia X9C503
+    delay(1);
+
+    // La lógica para ajustar la sensibilidad.
+    // Podría aplicar algo simple como aumentar o disminuir los pasos en función de la temperatura y la humedad.
+    if (promedioHumedad > 80.0)
+    {
+      // Incrementar la sensibilidad
+      digitalWrite(PREAMP_UD, HIGH);
+    }
+    else
+    {
+      // Decrementar la sensibilidad
+      digitalWrite(PREAMP_UD, LOW);
+    }
+    delay(1);
+
+    // Generar pulsos para incrementar/decrementar
+    for (int i = 0; i < 5; i++)
+    {
+      digitalWrite(PREAMP_INC, LOW);
+      delay(1);
+      digitalWrite(PREAMP_INC, HIGH);
+      delay(1);
+    }
+
+    digitalWrite(PREAMP_CS, HIGH); // Desseleccionar la resistencia X9C503
+  }
+
+  void ajustarGananciaMicrofono(float promedioTemperatura, float promedioHumedad)
+  {
+    // Ajustar la resistencia digital X9C103 para la ganancia del micrófono
+    digitalWrite(AMP_CS, LOW); // Seleccionar la resistencia X9C103
+    delay(1);
+
+    // La lógica para ajustar la ganancia.
+    // Podría aplicar algo simple como aumentar o disminuir los pasos en función de la temperatura y la humedad.
+    if (promedioTemperatura > 27.5)
+    {
+      // Incrementar la ganancia
+      digitalWrite(AMP_UD, HIGH);
+    }
+    else
+    {
+      // Decrementar la ganancia
+      digitalWrite(AMP_UD, LOW);
+    }
+    delay(1);
+
+    // Generar pulsos para incrementar/decrementar
+    for (int i = 0; i < 5; i++)
+    {
+      digitalWrite(AMP_INC, LOW);
+      delay(1);
+      digitalWrite(AMP_INC, HIGH);
+      delay(1);
+    }
+
+    digitalWrite(AMP_CS, HIGH); // Desseleccionar la resistencia X9C103
+  }
   // Tarea completada
   if (modoSinConexion)
   {
@@ -430,12 +507,45 @@ void cicloMonitoreo()
   }
 }
 
-void ajustarGananciaMicrofono(float promedioTemperatura, float promedioHumedad)
+void almacenarDatos(float temperaturas[], float humedades[], int ruidos[])
 {
-  // Código para ajustar la resistencia digital X9C103
+  // Inicializar EEPROM
+  EEPROM.begin(EEPROM_SIZE);
+
+  // Almacenar temperaturas
+
+  // Almacenar humedades
+
+  // Almacenar niveles de ruido
+
+  // Finalizar la escritura en EEPROM
+  EEPROM.commit();
 }
 
-void ajustarSensibilidadMicrofono(float promedioTemperatura, float promedioHumedad)
+// Función para leer los datos almacenados en EEPROM (por si necesitas leerlos más tarde)
+void leerDatosAlmacenados(float temperaturas[], float humedades[], int ruidos[])
 {
-  // Código para ajustar la resistencia digital X9C503
+  // Inicializar EEPROM
+  EEPROM.begin(EEPROM_SIZE);
+
+  // Leer temperaturas
+
+  // Leer humedades
+
+  // Leer niveles de ruido
 }
+
+//--------------------------------------------------------------------------------------------------------------------------------------------------
+// Si quiero realizar las mediciones por interrupción será ideal usar banderas para ejecutarlas en el momento especifico,
+// ya que las funciones de interrupción deben ser lo más breves posible y no deben realizar lecturas de sensores que podrían tardar en completarse.
+/*
+  void leerTempHumInterrupcion()
+  {
+    leerTempHumFlag = true;
+  }
+
+  void leerMicrofonoInterrupcion()
+  {
+    leerMicrofonoFlag = true;
+  }
+*/
