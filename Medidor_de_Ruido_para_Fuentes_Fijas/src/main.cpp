@@ -31,10 +31,10 @@
 #define KEYPAD_SDA 21
 #define KEYPAD_SCL 22
 
-#define FUNC1_PIN 32
-#define FUNC2_PIN 33
-#define FUNC3_PIN 34
-#define FUNC4_PIN 35
+#define OA_F_1 32
+#define OA_F_2 33
+#define OA_F_3 34
+#define OA_F_4 35
 
 #define PREAMP_UD 25
 #define PREAMP_INC 26
@@ -44,41 +44,37 @@
 #define AMP_INC 22
 #define AMP_CS 23
 
-#define DHT22_PIN 0
+#define DATA_SENSOR_TEMP_AND_HR 0
 #define DHTTYPE DHT22
 
-#define MIC_PIN 2
+#define MIC_SIGNAL_OUT 2
 
 #define BUZZER_PIN 5
 
+// Variables globales para datos capturados
+volatile float temperatura = 0.0;
+volatile float humedad = 0.0;
+volatile int micValue = 0;
+
 // Credenciales WIFI
-#define WIFI_SSID "your_SSID"
-#define WIFI_PASSWORD "your_PASSWORD"
+#define WIFI_SSID "SSID"
+#define WIFI_PASSWORD "PASSWORD"
 
 // Credenciales Server
-#define MQTT_SERVER "your_mqtt_server"
+#define MQTT_SERVER "mqtt_server"
 #define MQTT_PORT 1883
-#define MQTT_USER "your_mqtt_user"
-#define MQTT_PASSWORD "your_mqtt_password"
+#define MQTT_USER "mqtt_user"
+#define MQTT_PASSWORD "mqtt_password"
 
 // Configuración del cliente MQTT
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
 // Instancia del Sensor DHT22
-DHT dht(DHT22_PIN, DHTTYPE);
+DHT dht(DATA_SENSOR_TEMP_AND_HR, DHTTYPE);
 
 // Inicialización de la pantalla TFT
 Adafruit_ILI9488 tft = Adafruit_ILI9488(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCK, TFT_RESET);
-
-// Función para inicializar el Sensor y Microfono
-void initSensors()
-{
-  // Configuración del pin del micrófono como entrada
-  pinMode(MIC_PIN, INPUT);
-  // Inicialización del sensor DHT22
-  dht.begin();
-}
 
 // Configuración del teclado matricial
 const byte ROWS = 4; // Cuatro filas
@@ -124,22 +120,28 @@ void setup()
   kpd.begin();
 
   // Configuración de los pines de las teclas de función como entrada
-  pinMode(FUNC1_PIN, INPUT_PULLUP);
-  pinMode(FUNC2_PIN, INPUT_PULLUP);
-  pinMode(FUNC3_PIN, INPUT_PULLUP);
-  pinMode(FUNC4_PIN, INPUT_PULLUP);
+  pinMode(OA_F_1, INPUT_PULLUP);
+  pinMode(OA_F_2, INPUT_PULLUP);
+  pinMode(OA_F_3, INPUT_PULLUP);
+  pinMode(OA_F_4, INPUT_PULLUP);
 
-  // Configuración de las resistencias digitales variables
+  // Configuración de las resistencias digitales variables:
+  // Preamplificador (Mod_Sensibilidad)
   pinMode(PREAMP_UD, OUTPUT);
   pinMode(PREAMP_INC, OUTPUT);
   pinMode(PREAMP_CS, OUTPUT);
+  // Amplificador (Mod_Ganancia)
   pinMode(AMP_UD, OUTPUT);
   pinMode(AMP_INC, OUTPUT);
   pinMode(AMP_CS, OUTPUT);
 
-  // Configuración de los pines del sensor de temperatura y humedad y del micrófono
-  pinMode(DHT22_PIN, INPUT);
-  pinMode(MIC_PIN, INPUT);
+  // Configuración de los pines del sensor de temperatura-humedad y del micrófono
+  pinMode(DATA_SENSOR_TEMP_AND_HR, INPUT);
+  pinMode(MIC_SIGNAL_OUT, INPUT);
+
+  // Configuración de pines para lecturas de interrupción
+  attachInterrupt(digitalPinToInterrupt(DATA_SENSOR_TEMP_AND_HR), leerTempHumInterrupcion, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MIC_SIGNAL_OUT), leerMicrofonoInterrupcion, CHANGE);
 
   // Configuración del buzzer
   pinMode(BUZZER_PIN, OUTPUT);
@@ -166,71 +168,90 @@ void setup()
     while (!Serial.available())
       ;
     char response = Serial.read();
-    if (response == 'y' || response == 'Y')
+    if (digitalRead(OA_F_1) == HIGH)
     {
       // Continuar en modo sin conexión
       Serial.println("Continuando en modo sin conexión...");
       // Ir a HOME
+      homeScreen(); // Aquí deberías implementar la lógica para mostrar la pantalla HOME sin conexión
+      break;
     }
-    else
+    else if (digitalRead(OA_F_2) == HIGH)
     {
       // Ir a CONFI (configuración)
-      Serial.println("Reiniciando para configuración...");
-      ESP.restart();
-    }
-  }
-  else
-  {
-    Serial.println("Conexión Wi-Fi exitosa.");
-    // Continuar al siguiente punto
-  }
-
-  // Intentar conectar al servidor remoto
-  if (!connectMQTT())
-  {
-    // Sección de ERROR: si hay errores de conexión, activar el buzzer y detener el programa
-    Serial.println("Error de conexión con el servidor remoto.");
-    while (true)
-    {
-      digitalWrite(BUZZER_PIN, HIGH);
-      delay(1000);
-      digitalWrite(BUZZER_PIN, LOW);
-      delay(1000);
-    }
-  }
-
-  // Verificar si hay tareas pendientes
-  if (checkPendingTasks())
-  {
-    Serial.println("Tareas pendientes encontradas.");
-    // Aquí se leería la información de la tarea pendiente
-    // Esperar confirmación del usuario para continuar
-    Serial.println("Desea continuar con la tarea? (F1: Continuar, F2: Cancelar)");
-    while (!Serial.available())
-      ;
-    char response = Serial.read();
-    if (response == '1')
-    {
-      // Cargar Información de la Tarea
-      Serial.println("Cargando información de la tarea...");
-      // Monitor de Tarea
+      Serial.println("Dirigiendo a configuración...");
+      break;
     }
     else
     {
-      // Ir a HOME
-      Serial.println("Cancelando tarea. Regresando a HOME...");
+      Serial.println("Conexión Wi-Fi exitosa.");
+      // Continuar al siguiente punto
     }
-  }
-  else
-  {
-    Serial.println("No hay tareas pendientes.");
-    // Ir a HOME
+
+    // Intentar conectar al servidor remoto
+    if (!connectMQTT())
+    {
+      // Sección de ERROR: si hay errores de conexión, activar el buzzer y detener el programa
+      Serial.println("Error de conexión con el servidor remoto.");
+      while (true)
+      {
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(1000);
+        digitalWrite(BUZZER_PIN, LOW);
+        delay(1000);
+      }
+    }
+
+    // Verificar si hay tareas pendientes
+    if (checkPendingTasks())
+    {
+      Serial.println("Tareas pendientes encontradas.");
+      // Aquí se leería la información de la tarea pendiente
+      // Esperar confirmación del usuario para continuar
+      Serial.println("Desea continuar con la tarea? (F1: Continuar, F2: Cancelar)");
+
+      while (!Serial.available())
+
+        char response = Serial.read();
+
+      if (response = '1' && (OA_F_1) == HIGH)
+      {
+        // Cargar Información de la Tarea
+        Serial.println("Cargando información de la tarea...");
+        // Monitor de Tarea
+        break;
+      }
+      else if (digitalRead(OA_F_2) == HIGH)
+      {
+        // Ir a HOME
+        Serial.println("Cancelando tarea. Dirigiendo a HOME...");
+        homeScreen(); // Implementar la lógica para mostrar la pantalla HOME
+        break;
+      }
+    }
+    else
+    {
+      Serial.println("No hay tareas pendientes.");
+      // Ir a HOME
+      homeScreen(); // Implementar la lógica para mostrar la pantalla HOME
+    }
   }
 }
 
 void loop()
 {
+  // Verificar si el usuario ha seleccionado alguna función
+  checkSelectedFunction();
   // Aquí se implementaría el resto del código para el funcionamiento del sistema
+}
+
+// Función para inicializar el Sensor y Microfono
+void initSensors()
+{
+  // Configuración del pin del micrófono como entrada
+  pinMode(MIC_SIGNAL_OUT, INPUT);
+  // Inicialización del sensor DHT22
+  dht.begin();
 }
 
 void setupMQTT()
@@ -255,14 +276,14 @@ bool connectMQTT()
 bool checkReadErrors()
 {
   // Lectura de la temperatura del sensor DHT22
-  float temperature = dht.readTemperature();
+  float temperatura = dht.readTemperature();
   // Lectura de la humedad del sensor DHT22
-  float humidity = dht.readHumidity();
+  float humedad = dht.readHumidity();
   // Lectura del valor del micrófono
-  int micValue = analogRead(MIC_PIN);
+  int micValue = analogRead(MIC_SIGNAL_OUT);
 
   // Verificación de si alguna lectura falló
-  if (isnan(temperature) || isnan(humidity) || micValue < 0)
+  if (isnan(temperatura) || isnan(humedad) || micValue < 0)
   {
     return true;
   }
@@ -288,14 +309,59 @@ bool checkWiFiConnection()
 // Función para verificar tareas pendientes
 bool checkPendingTasks()
 {
-  // Aquí se leerían y verificarían los datos remotos utilizando MQTT
-  // Esta función debería retornar true si hay tareas pendientes, false en caso contrario
+  // Aquí se leerán y verificarán los datos remotos utilizando MQTT
+  // Esta función deberá retornar true si hay tareas pendientes, false en caso contrario
   return false; // Ejemplo: sin tareas pendientes
+}
+
+// Función para verificar si el usuario ha seleccionado alguna función
+void checkSelectedFunction()
+{
+  // Verificación de botones de función
+  if (digitalRead(OA_F_1) == HIGH)
+  {
+    // Si el usuario presionó OA_F_1 (F1), implementar acción
+    // Aquí se debe implementar la lógica correspondiente
+  }
+  else if (digitalRead(OA_F_2) == HIGH)
+  {
+    // Si el usuario presionó OA_F_2 (F2), implementar acción
+    // Aquí deberías implementar la lógica correspondiente
+  }
+  else if (digitalRead(OA_F_3) == HIGH)
+  {
+    // Si el usuario presionó OA_F_3 (F3), implementar acción
+    // Aquí deberías implementar la lógica correspondiente
+  }
+  else if (digitalRead(OA_F_4) == HIGH)
+  {
+    // Si el usuario presionó OA_F_4 (F4), implementar acción
+    // Aquí deberías implementar la lógica correspondiente
+  }
+}
+
+// Función para cargar la pantalla principal (HOME)
+void homeScreen()
+{
+  // Implementar aquí la lógica para cargar y mostrar la pantalla HOME en la TFT
+
+  // Cargar Barra de Estados del Equipo
+  loadEquipmentStatusbar();
+
+  // Cargar Indicadores en la Barra de Estados
+  loadStatusIndicators();
+
+  // Cargar Iconos de Funciones en la Parte Inferior de la Pantalla
+  loadFunctionIcons();
+
+  // Cargar Información de la Sección HOME en la Pantalla TFT LCD SPI ILI9488
+  loadHomeSection();
 }
 
 void cicloMonitoreo()
 {
   tiempoInicioTarea = millis();
+
   while (millis() - tiempoInicioTarea < DURACION_TAREA)
   {
     unsigned long tiempoActual = millis();
