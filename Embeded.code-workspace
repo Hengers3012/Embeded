@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "X9C103_test_Arduino",
+			"path": "X9C103_test_Arduino"
+		},
+		{
+			"name": "Medidor_de_Ruido_para_Fuentes_Fijas",
+			"path": "Medidor_de_Ruido_para_Fuentes_Fijas"
+		}
+	],
+	"settings": {}
+}
