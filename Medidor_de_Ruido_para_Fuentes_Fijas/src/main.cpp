@@ -276,6 +276,37 @@ void loop()
 {
   // Verificar si el usuario ha seleccionado alguna función
   checkSelectedFunction();
+
+  // Verificar la conexión WiFi y MQTT
+  if (WiFi.status() != WL_CONNECTED || !client.connected())
+  {
+    // Reintentar la conexión
+    reconnect();
+  }
+
+  // Gestionar los eventos MQTT si hay una conexión activa
+  if (client.connected())
+  {
+    client.loop();
+  }
+
+  // Manejar interrupciones
+  handleInterrupts();
+
+  // Verificar si es necesario publicar datos
+  if (millis() - tiempoUltimaPublicacion >= intervaloPublicacion)
+  {
+    publishData();
+  }
+
+  // Gestionar eventos del teclado matricial
+  char key = kpd.getKey();
+  if (key)
+  {
+    handleKeypadEvent(key);
+  }
+
+  // Otras tareas del bucle principal
   // Aquí se implementaría el resto del código para el funcionamiento del sistema
 }
 
@@ -292,6 +323,7 @@ void setupMQTT()
 {
   // Configuración del servidor MQTT
   client.setServer(MQTT_SERVER, MQTT_PORT);
+  client.setCallback(callback);
 }
 
 // Función para establecer la conexión al servidor MQTT
@@ -304,6 +336,12 @@ bool connectMQTT()
     return true;
   }
   return false;
+}
+
+// Función para manejar eventos del teclado matricial
+void handleKeypadEvent(char key)
+{
+  // Lógica para manejar eventos del teclado matricial
 }
 
 // Función para verificar errores de lectura
@@ -346,6 +384,43 @@ bool checkPendingTasks()
   // Aquí se leerán y verificarán los datos remotos utilizando MQTT
   // Esta función deberá retornar true si hay tareas pendientes, false en caso contrario
   return false; // Ejemplo: sin tareas pendientes
+}
+
+// Función para manejar la reconexión a Wi-Fi y MQTT
+void reconnect()
+{
+  // Reconexión Wi-Fi
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print("Intentando conectar a SSID: ");
+    Serial.println(WIFI_SSID);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    delay(5000);
+  }
+
+  // Reconexión MQTT
+  while (!client.connected())
+  {
+    Serial.println("Intentando conexión MQTT...");
+    if (client.connect("ESP32Client", MQTT_USER, MQTT_PASSWORD))
+    {
+      Serial.println("Conectado al servidor MQTT.");
+      client.subscribe("esp32/output");
+    }
+    else
+    {
+      Serial.print("Fallo, rc=");
+      Serial.print(client.state());
+      Serial.println(" Intentando de nuevo en 5 segundos.");
+      delay(5000);
+    }
+  }
+}
+
+// Función de devolución de llamada para el cliente MQTT
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  // Lógica para manejar mensajes recibidos a través de MQTT
 }
 
 // Función para verificar si el usuario ha seleccionado alguna función
@@ -530,6 +605,12 @@ void cicloMonitoreo()
     digitalWrite(AMP_CS, HIGH); // Desseleccionar la resistencia X9C103
   }
 
+  // Función para publicar datos a través de MQTT
+  void publicarDatosMQTT(float *temperaturas, float *humedades, int *ruidos)
+  {
+    // Lógica para publicar datos a través de MQTT
+  }
+
   // Tarea completada
   if (modoSinConexion)
   {
@@ -539,6 +620,40 @@ void cicloMonitoreo()
   {
     mostrarMensajeTareaCompleta(false);
   }
+}
+
+// Función para almacenar datos en la memoria EEPROM
+void almacenarDatos(float temperaturas[], float humedades[], int ruidos[])
+{
+  // Inicializar EEPROM
+  EEPROM.begin(EEPROM_SIZE);
+
+  // Almacenar temperaturas
+  for (int i = 0; i < DATA_SIZE; i++)
+  {
+    int addr = TEMP_START_ADDR + i * sizeof(float);
+    float temp = temperaturas[i];
+    EEPROM.put(addr, temp);
+  }
+
+  // Almacenar humedades
+  for (int i = 0; i < DATA_SIZE; i++)
+  {
+    int addr = HUM_START_ADDR + i * sizeof(float);
+    float hum = humedades[i];
+    EEPROM.put(addr, hum);
+  }
+
+  // Almacenar niveles de ruido
+  for (int i = 0; i < DATA_SIZE; i++)
+  {
+    int addr = NOISE_START_ADDR + i * sizeof(int);
+    int noise = ruidos[i];
+    EEPROM.put(addr, noise);
+  }
+
+  // Finalizar la escritura en EEPROM
+  EEPROM.commit();
 }
 
 float leerTemperatura()
@@ -642,6 +757,25 @@ void leerDatosAlmacenados(float temperaturas[], float humedades[], int ruidos[])
 //--------------------------------------------------------------------------------------------------------------------------------------------------
 // Si quiero realizar las mediciones por interrupción será ideal usar banderas para ejecutarlas en el momento especifico,
 // ya que las funciones de interrupción deben ser lo más breves posible y no deben realizar lecturas de sensores que podrían tardar en completarse.
+
+// Función para manejar las interrupciones
+void handleInterrupts()
+{
+  // Manejo de interrupción para leer temperatura y humedad
+  if (leerTempHumFlag)
+  {
+    // Lógica para manejar la interrupción de lectura de temperatura y humedad
+    leerTempHumFlag = false;
+  }
+
+  // Manejo de interrupción para leer micrófono
+  if (leerMicrofonoFlag)
+  {
+    // Lógica para manejar la interrupción de lectura de micrófono
+    leerMicrofonoFlag = false;
+  }
+}
+
 /*
   void leerTempHumInterrupcion()
   {
