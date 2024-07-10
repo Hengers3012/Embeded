@@ -2,13 +2,12 @@
 #include <Wire.h>
 
 // Pantalla ILI9488
-#include "SPI.h"
+#include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <ILI9488.h>
 
-// KeyPad 3x4
+// Teclado Matricial 3x4
 #include <Keypad_I2C.h>
-#include <Keypad.h>
 #include <PCF8574_HD44780_I2C.h>
 
 // DHT22
@@ -16,8 +15,6 @@
 
 // WIFI
 #include <WiFi.h>
-
-// Server
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 
@@ -58,9 +55,9 @@
 #define WIFI_SSID "SSID"
 #define WIFI_PASSWORD "PASSWORD"
 
-// Credenciales Server
+// Credenciales Server MQTT
 #define MQTT_SERVER "mqtt_server"
-#define MQTT_PORT 1883
+#define MQTT_PORT 0000
 #define MQTT_USER "mqtt_user"
 #define MQTT_PASSWORD "mqtt_password"
 
@@ -98,10 +95,34 @@ Keypad_I2C kpd(makeKeymap(keys), rowPins, colPins, ROWS, COLS, KEYPAD_SDA, KEYPA
 volatile bool leerTempHumFlag = false;
 volatile bool leerMicrofonoFlag = false;
 
-// Variables globales para datos capturados
+// Variables globales
 volatile float temperatura = 0.0;
 volatile float humedad = 0.0;
 volatile int micValue = 0;
+
+volatile unsigned long tiempoRuidoAnterior = 0;
+volatile unsigned long tiempoTempHumAnterior = 0;
+
+volatile int ruidos[12] = {0};
+volatile float temperaturas[10] = {0.0};
+volatile float humedades[10] = {0.0};
+
+volatile int indiceRuido = 0;
+volatile int indiceTempHum = 0;
+
+float promedioTemperatura = 0.0;
+float promedioHumedad = 0.0;
+
+float temperaturaAnterior = 0.0;
+float humedadAnterior = 0.0;
+
+bool modoSinConexion = false;
+
+unsigned long tiempoInicioTarea = 0;
+const unsigned long duracionTarea = 0;
+
+unsigned long tiempoUltimaPublicacion = 0;
+const unsigned long intervaloPublicacion = 0;
 
 void setup()
 {
@@ -130,7 +151,6 @@ void setup()
   tft.println("Inicializando...");
 
   // Inicialización del teclado matricial
-  Wire.begin(KEYPAD_SDA, KEYPAD_SCL);
   kpd.begin();
 
   // Configuración de los pines de las teclas de función como entrada
@@ -376,7 +396,7 @@ void cicloMonitoreo()
 {
   tiempoInicioTarea = millis();
 
-  while (millis() - tiempoInicioTarea < DURACION_TAREA)
+  while (millis() - tiempoInicioTarea < duracionTarea)
   {
     unsigned long tiempoActual = millis();
 
@@ -388,7 +408,7 @@ void cicloMonitoreo()
       tiempoRuidoAnterior = tiempoActual;
 
       // Mostrar valores actualizados en pantalla
-      mostrarEnPantalla(promedioTemperatura, promedioHumedad, ruidos[indiceRuido]);
+      showOnScreen(promedioTemperatura, promedioHumedad, ruidos[indiceRuido]);
     }
 
     // Proceso de lectura de temperatura y humedad
@@ -396,26 +416,27 @@ void cicloMonitoreo()
     {
       temperaturas[indiceTempHum] = leerTemperatura();
       humedades[indiceTempHum] = leerHumedad();
-      indiceTempHum = (indiceTempHum + 1) % 10; // Circular buffer
+      indiceTempHum = (indiceTempHum + 1) % 10; /* Circular buffer: es una estructura de datos que utiliza una sola cola de tamaño fijo como si fuera conectada de extremo a extremo,
+                                                                    lo cual es muy útil para almacenar datos en tiempo real sin necesidad de desplazar elementos en la memoria.    */
 
       promedioTemperatura = calcularPromedio(temperaturas, 10);
       promedioHumedad = calcularPromedio(humedades, 10);
 
       tiempoTempHumAnterior = tiempoActual;
 
-      // Guardar valores anteriores para comparación
+      // Guardar valores anteriores para la comparación
       temperaturaAnterior = promedioTemperatura;
       humedadAnterior = promedioHumedad;
 
       // Mostrar valores actualizados en pantalla
-      mostrarEnPantalla(promedioTemperatura, promedioHumedad, ruidos[indiceRuido]);
+      showOnScreen(promedioTemperatura, promedioHumedad, ruidos[indiceRuido]);
     }
 
     // Verificar cambio de temperatura
     if (abs(promedioTemperatura - temperaturaAnterior) > 0.5)
     {
-      ajustarGananciaMicrofono(promedioTemperatura, promedioHumedad);
-      ajustarSensibilidadMicrofono(promedioTemperatura, promedioHumedad);
+      ajustarGanancia(promedioTemperatura, promedioHumedad);
+      ajustarSensibilidad(promedioTemperatura, promedioHumedad);
     }
 
     // Verificar estado de conexión y publicar datos acumulados
@@ -425,7 +446,7 @@ void cicloMonitoreo()
     }
     else
     {
-      if (tiempoActual - tiempoUltimaPublicacion >= INTERVALO_PUBLICACION)
+      if (tiempoActual - tiempoUltimaPublicacion >= intervaloPublicacion)
       {
         publicarDatosMQTT(temperaturas, humedades, ruidos);
         tiempoUltimaPublicacion = tiempoActual;
@@ -433,7 +454,19 @@ void cicloMonitoreo()
     }
   }
 
-  void ajustarSensibilidadMicrofono(float promedioTemperatura, float promedioHumedad)
+  float calcularPromedio(float datos[], int cantMed)
+  {
+    float suma = 0.0;
+
+    for (int i = 0; i < cantMed; i++)
+    {
+      suma += datos[i];
+    }
+
+    return suma / cantMed;
+  }
+
+  void ajustarSensibilidad(float promedioTemperatura, float promedioHumedad)
   {
     // Ajustar la resistencia digital X9C503 para la sensibilidad del micrófono
     digitalWrite(PREAMP_CS, LOW); // Seleccionar la resistencia X9C503
@@ -444,12 +477,12 @@ void cicloMonitoreo()
     if (promedioHumedad > 80.0)
     {
       // Incrementar la sensibilidad
-      digitalWrite(PREAMP_UD, HIGH);
+      digitalWrite(PREAMP_U_D, HIGH);
     }
     else
     {
       // Decrementar la sensibilidad
-      digitalWrite(PREAMP_UD, LOW);
+      digitalWrite(PREAMP_U_D, LOW);
     }
     delay(1);
 
@@ -465,7 +498,7 @@ void cicloMonitoreo()
     digitalWrite(PREAMP_CS, HIGH); // Desseleccionar la resistencia X9C503
   }
 
-  void ajustarGananciaMicrofono(float promedioTemperatura, float promedioHumedad)
+  void ajustarGanancia(float promedioTemperatura, float promedioHumedad)
   {
     // Ajustar la resistencia digital X9C103 para la ganancia del micrófono
     digitalWrite(AMP_CS, LOW); // Seleccionar la resistencia X9C103
@@ -496,6 +529,7 @@ void cicloMonitoreo()
 
     digitalWrite(AMP_CS, HIGH); // Desseleccionar la resistencia X9C103
   }
+
   // Tarea completada
   if (modoSinConexion)
   {
@@ -505,6 +539,76 @@ void cicloMonitoreo()
   {
     mostrarMensajeTareaCompleta(false);
   }
+}
+
+float leerTemperatura()
+{
+  // Leer la temperatura del sensor DHT
+  float temp = dht.readTemperature();
+  // Verificar si la lectura fue exitosa
+  if (isnan(temp))
+  {
+    Serial.println("Error al leer la temperatura!");
+    return -1; // Valor para identificación de error
+  }
+  return temp;
+}
+
+float leerHumedad()
+{
+  // Leer la humedad del sensor DHT
+  float humedad = dht.readHumidity();
+  // Verificar si la lectura fue exitosa
+  if (isnan(humedad))
+  {
+    Serial.println("Error al leer la humedad!");
+    return -1; // Valor para identificación de error
+  }
+  return humedad;
+}
+
+int leerRuido()
+{
+  // Leer el valor del micrófono
+  int micValue = analogRead(MIC_SIGNAL_OUT);
+  // Verificar si la lectura fue exitosa (esto dependerá de cómo manejes los valores esperados)
+  if (micValue < 0 || micValue > 1024)
+  {
+    Serial.println("Error al leer el ruido!");
+    return -1; // Valor para identificación de error
+  }
+  return micValue;
+}
+
+void showOnScreen(float temperatura, float humedad, int ruido)
+{
+  // Limpiar la pantalla antes de actualizar los valores
+  tft.fillScreen(ILI9488_BLACK);
+
+  // Configurar el cursor y las propiedades del texto
+  tft.setTextColor(ILI9488_WHITE);
+  tft.setTextSize(2);
+
+  // Mostrar la temperatura
+  tft.setCursor(10, 30);
+  tft.print("Temperatura: ");
+  tft.print(temperatura);
+  tft.println(" C");
+
+  // Mostrar la humedad
+  tft.setCursor(10, 60);
+  tft.print("Humedad: ");
+  tft.print(humedad);
+  tft.println(" %");
+
+  // Mostrar el ruido
+  tft.setCursor(10, 90);
+  tft.print("Ruido: ");
+  tft.print(ruido);
+  tft.println(" dB");
+
+  // Puedes añadir más información según sea necesario
+  // Por ejemplo, el estado de conexión o la hora
 }
 
 void almacenarDatos(float temperaturas[], float humedades[], int ruidos[])
